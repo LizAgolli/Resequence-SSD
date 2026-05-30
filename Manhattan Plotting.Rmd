@@ -1,0 +1,275 @@
+---
+title: "Manhattan Plotting"
+author: "Liz Chen"
+date: "2026-05-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(cowplot)
+library(CMplot)
+library(plotly)
+library(dplyr)
+library(ggridges)
+library(qqman)
+library(rtracklayer)
+library(GenomicRanges)
+```
+
+```{r loading and transforming data}
+setwd("~/Documents/SSD_Data")
+
+X2p <- read.csv("HPC_output/ChiSqInput/all_X2_pvals.csv", header = T)
+
+CLEAR_LLR <- read.csv("HPC_output/CLEAR_altnull_filtered.csv", header = T)
+
+Fst <- read.csv("HPC_output/improved_window/all_line_fst.csv", header = T) 
+
+pi10k <- read.csv("HPC_output/improved_window/10000_pidiversity.csv", header = T)
+
+extract_genes_from_gff <- function(gff_file) {
+  gff <- read.table(gff_file, sep = "\t", header = FALSE,
+                    comment.char = "#", stringsAsFactors = FALSE, quote = "")
+  colnames(gff) <- c("seqid", "source", "type", "start", "end",
+                     "score", "strand", "phase", "attributes")
+
+  genes <- gff[gff$type == "gene", ]
+
+  extract_attr <- function(attr, key) {
+    pattern <- paste0(key, "=([^;]+)")
+    matches <- regmatches(attr, regexec(pattern, attr))
+    sapply(matches, function(x) if(length(x) > 1) x[2] else NA)
+  }
+
+  genes$gene_id   <- extract_attr(genes$attributes, "ID")
+  genes$gene_name <- extract_attr(genes$attributes, "Name")
+
+  genes_coding <- genes[!grepl("lncRNA|tRNA|rRNA|pseudogene",
+                                genes$attributes, ignore.case = TRUE), ]
+
+  gene_df <- genes_coding[!duplicated(genes_coding$gene_id),
+                           c("gene_id", "gene_name", "seqid", "start", "end")]
+  return(na.omit(gene_df))
+}
+
+snp_in_genes <- function(snp_df, gene_df) {
+  if(is.null(gene_df) || nrow(gene_df) == 0) {
+    return(rep(FALSE, nrow(snp_df)))
+  }
+  hits <- vector("logical", nrow(snp_df))
+  for (i in seq_len(nrow(gene_df))) {
+    if(any(is.na(gene_df[i, c("seqid", "start", "end")]))) next
+    
+    hits <- hits | (snp_df$Chromosome == gene_df$seqid[i] &
+                    snp_df$Position >= gene_df$start[i] &
+                    snp_df$Position <= gene_df$end[i])
+  }
+  return(hits)
+}
+
+snp_in_gene_list <- function(snp_df, gene_names, gff_df) {
+  target_genes <- gff_df[gff_df$gene_name %in% gene_names | 
+                          gff_df$gene_id %in% gene_names, ]
+  if(nrow(target_genes) == 0) return(rep(FALSE, nrow(snp_df)))
+  hits <- rep(FALSE, nrow(snp_df))
+  for(i in 1:nrow(target_genes)) {
+    hits <- hits | (snp_df$Chromosome == target_genes$seqid[i] &
+                    snp_df$Position >= target_genes$start[i] &
+                    snp_df$Position <= target_genes$end[i])
+  }
+  return(hits)
+}
+
+#all my gene hits
+CX2gff <- extract_genes_from_gff("GFFs/CX2featuremapper.gff")
+HX2gff <- extract_genes_from_gff("GFFs/HX2featuremapper.gff")
+LX2gff <- extract_genes_from_gff("GFFs/LX2featuremapper.gff")
+```
+  
+```{r pi waveplot}
+pi_factored <- rbind(
+  data.frame(pi = Cpi$Ctheta_pi, lineage = "Final CL"),
+  data.frame(pi = Hpi$Htheta_pi, lineage = "Final HL"),
+  data.frame(pi = Lpi$Ltheta_pi, lineage = "Final LL"),
+  data.frame(pi = Opi$Otheta_pi, lineage = "Initial")
+)
+pi_factored <- na.omit(pi_factored)
+
+piplot <- ggplot(pi_factored, aes(x = pi, y = lineage, fill = lineage)) +
+  stat_density_ridges(quantile_lines = TRUE, quantiles = 2, alpha = 0.6, scale = 1.75) +
+  scale_fill_manual(values = c("Final CL" = "#7f7f7f", 
+                               "Final HL" = "#ffb656", 
+                               "Final LL" = "#004c84", 
+                               "Initial" = "purple")) +
+  coord_cartesian(xlim = c(-0.02, 0.25))+
+  labs(x = expression(pi), y = "Population") +
+  theme_cowplot() +
+  theme(legend.position = "none")
+
+ggsave(piplot, file="~/Documents/SSD_Data/HPC_output/improved_window/piplot.png", width = 6, height = 6)
+```
+  
+```{r just chi square plots}
+chi_man_data <- data.frame(
+    SNP = paste("snp", 1:nrow(X2p), sep = "_"),
+    Chromosome = X2p$CHROM,
+    Position = X2p$POS,
+    trait1 = X2p$CvsO,
+    trait2 = X2p$HvsO,
+    trait3 = X2p$LvsO
+  )
+
+#seperate plots for each line in one figure
+#CMplot(chi_man_data, plot.type = "m", multracks=TRUE, col=c("grey","lightblue"), threshold=10-6, 
+#       signal.col="red", signal.cex=0.8, file.name="lines.seperate",dpi=300,file.output=TRUE,verbose=TRUE)
+
+#overlapping plots
+#CMplot(chi_man_data, plot.type = "m", multraits=TRUE, threshold=10^-6, 
+#        threshold.lwd=1, threshold.col="black", amplify=TRUE,bin.size=1e6, col="grey",
+#       chr.den.col=c("darkgreen", "yellow", "red"), 
+#        signal.col=c("#7f7f7f","#ffb656","#004c84"), signal.cex=1, 
+#        file="jpg",file.name="lines.stacked",dpi=300,file.output=TRUE,verbose=TRUE,
+#        points.alpha=100,legend.ncol=1, legend.pos="left")
+```
+
+```{r chi qqman to stack with Fst}
+chromnames <- c("2L", "2R", "3L", "3R", "X")
+
+chi_man_data$chrom_num <- as.factor(chi_man_data$Chromosome)
+levels(chi_man_data$chrom_num) <- list("4" = 1, "2L" = 2, "2R" = 3, "3L" = 4, "3R" = 5, "X" = 6) 
+chi_man_data$chrom_num <- as.numeric(chi_man_data$chrom_num)
+
+chi_man_data <- subset(chi_man_data, chrom_num != 1) #remove chromosome 4
+
+figwidth = 12
+figheight = 4
+
+png("~/Documents/SSD_Data/manhattan_CX2.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(chi_man_data, suggestiveline = F, genomewideline = 6,  snp="SNP", chr="chrom_num", bp="Position", p="trait1", ylim = c(0, 37), chrlabs = chromnames))
+dev.off()
+
+png("~/Documents/SSD_Data/manhattan_HX2.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(chi_man_data, suggestiveline = F, genomewideline = 6, snp="SNP", chr="chrom_num", bp="Position", p="trait2", ylim = c(0, 37), chrlabs = chromnames, col = c("orange4", "orange1")))
+dev.off()
+
+png("~/Documents/SSD_Data/manhattan_LX2.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(chi_man_data, suggestiveline = F, genomewideline = 6, snp="SNP", chr="chrom_num", bp="Position", p="trait3", ylim = c(0, 37), chrlabs = chromnames, col = c("blue1", "lightblue")))
+dev.off
+```
+
+```{r chi data with mutual hits highlights}
+chi_man_data <- chi_man_data %>%
+  mutate(
+    in_HX2    = snp_in_genes(., HX2gff),
+    in_LX2    = snp_in_genes(., LX2gff),
+    in_CX2    = snp_in_genes(., CX2gff)
+  )
+
+H_snps    <- chi_man_data$SNP[chi_man_data$in_HX2]
+L_snps    <- chi_man_data$SNP[chi_man_data$in_LX2]
+C_snps    <- chi_man_data$SNP[chi_man_data$in_CX2]
+
+H_and_L_not_C <- intersect(H_snps, L_snps) |> setdiff(C_snps)
+
+png("~/Documents/SSD_Data/man_HX2bothchihighlighted.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(chi_man_data, suggestiveline = F, genomewideline = 6, snp="SNP", chr="chrom_num", bp="Position", p="trait2", ylim = c(0, 37), chrlabs = chromnames, highlight=H_and_L_not_C))
+dev.off()
+
+png("~/Documents/SSD_Data/man_LX2bothchihighlighted.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(chi_man_data, suggestiveline = F, genomewideline = 6, snp="SNP", chr="chrom_num", bp="Position", p="trait3", ylim = c(37, 0), chrlabs = chromnames, highlight=H_and_L_not_C))
+dev.off()
+```
+
+```{r chi data with GWAS hits highlighted}
+vea_hits <- scan(text = "asR:CR43898 baz CG1677 CG32333 CG43902 CG7884 pnt Strn-Mlck axo CG13917 CG14764 CG15765 CG1677 CG17097 CG30015 CG31743 CG32333 CG42458 CG42750 CG42852 CG43759 CG44153 CG4829 CG7985 Dgk dnc Drgx Dys eIF5B erm Fas3 Fife Fili fru IA-2 jing kirre msi Neto nmo nolo Pde11 pHCl-1 pigs pk pnt Pxn RhoGEF64C rols sano Sdc sdt Shab shot SPR tei Trim9 unc-13-4A vkg Wdr62 Wnt4 beat-IIb boi capu casp CG12535 CG32066 CG32373 CG33144 CG34354 CG34393 CG3558 CG42540 CG43759 CG44153 CG4563 cnc Cpr47Ed dally dcma DIP-eta dnc dpr2 Dys Fatp2 fred fz Glut1 IA-2 Ih jing kirre Klp31E kn Lmpt lu Neto path Pde11 Pdp1 Pka-C2 px rdgB Sema1a Sema2b Shab Shrm side-II so tai Tmtc1 Tmtc2 unc-13-4A wda Wdr62 zfh1 CadN CG14205 CG34354 CG3604 CG42750 CG4563 CG5973 clu Cpr47Ed dcma eIF5B Gfrl Klp31E kn lu path Pdp1 Pgam5-2 Pka-C2 rib Snx27 Tmtc2 wda", what = "character", quiet = TRUE)
+
+vea_hits <- unique(vea_hits)
+
+vea_hits_snps <- snp_in_gene_list(chi_man_data, vea_hits, CX2gff) |
+                 snp_in_gene_list(chi_man_data, vea_hits, HX2gff) |
+                 snp_in_gene_list(chi_man_data, vea_hits, LX2gff)
+
+vea_snp_names <- chi_man_data$SNP[vea_hits_snps]
+
+H_and_vea <- intersect(H_snps, vea_snp_names) |> setdiff(C_snps)
+L_and_vea <- intersect(L_snps, vea_snp_names) |> setdiff(C_snps)
+
+png("~/Documents/SSD_Data/man_HX2highlightedGWAS.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(chi_man_data, suggestiveline = F, genomewideline = 6, snp="SNP", chr="chrom_num", bp="Position", p="trait2", ylim = c(0, 37), chrlabs = chromnames, highlight=H_and_vea))
+dev.off()
+
+png("~/Documents/SSD_Data/man_LX2highlightedGWAS.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(chi_man_data, suggestiveline = F, genomewideline = 6, snp="SNP", chr="chrom_num", bp="Position", p="trait3", ylim = c(37, 0), chrlabs = chromnames, highlight=L_and_vea))
+dev.off()
+```
+
+```{r plotting Fst}
+all_lines_fst$POS = ((all_lines_fst$start+all_lines_fst$end)/2)
+
+all_lines_fst$chrom_num <- as.factor(all_lines_fst$chrom)
+levels(all_lines_fst$chrom_num) <- list("4" = 1, "2L" = 2, "2R" = 3, "3L" = 4, "3R" = 5, "X" = 6) 
+all_lines_fst$chrom_num <- as.numeric(all_lines_fst$chrom_num)
+
+all_lines_fst_clean <- all_lines_fst[!is.na(all_lines_fst$COfst) & 
+                                      !is.na(all_lines_fst$HOfst) & 
+                                      !is.na(all_lines_fst$LOfst) &
+                                       !is.na(all_lines_fst$HLfst), ]
+
+all_lines_fst_clean$SNP <- paste0("snp_", 1:nrow(all_lines_fst_clean))
+
+all_lines_fst_clean$Chromosome <- all_lines_fst_clean$chrom
+all_lines_fst_clean$Position <- all_lines_fst_clean$POS
+
+all_lines_fst_clean <- all_lines_fst_clean %>%
+  mutate(
+    in_HX2    = snp_in_genes(., HX2gff),
+    in_LX2    = snp_in_genes(., LX2gff),
+    in_CX2    = snp_in_genes(., CX2gff)
+  )
+
+H_snps_fst    <- all_lines_fst_clean$SNP[all_lines_fst_clean$in_HX2]
+L_snps_fst    <- all_lines_fst_clean$SNP[all_lines_fst_clean$in_LX2]
+C_snps_fst    <- all_lines_fst_clean$SNP[all_lines_fst_clean$in_CX2]
+
+H_and_L_not_C_fst <- intersect(H_snps_fst, L_snps_fst) |> setdiff(C_snps_fst)
+
+
+png("~/Documents/SSD_Data/man_CX2fst.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(all_lines_fst_clean, snp="SNP", chr="chrom_num", bp="POS", p="COfst", ylab="Fst", logp=FALSE, main = "Origin vs Control, FST", chrlabs = chromnames))
+dev.off
+
+png("~/Documents/SSD_Data/man_HX2fst.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(all_lines_fst_clean, snp="SNP",chr="chrom_num", bp="POS", p="HOfst", ylab="Fst", logp=FALSE, chrlabs = chromnames, col = c("orange4", "orange1") 
+                         #, highlight=H_and_L_not_C_fst
+                         ))
+dev.off()
+
+png("~/Documents/SSD_Data/man_LX2fst.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(all_lines_fst_clean, snp="SNP",chr="chrom_num", bp="POS", p="LOfst", ylab="Fst", logp=FALSE, chrlabs = chromnames, col = c("blue1", "lightblue")
+                         #, highlight=H_and_L_not_C_fst
+                         ))
+dev.off()
+```
+
+```{r combining chi with Fst}
+#cowplot Cchi over Cfst
+#save to GeneticAnalysesPlots
+```
+
+```{r CLEAR qqman}
+CLEAR_LLR$SNP <- paste("snp", 1:nrow(CLEAR_LLR), sep = "_")
+CLEAR_LLR$chrom_num <- as.factor(CLEAR_LLR$CHROM)
+levels(CLEAR_LLR$chrom_num) <- list("4" = 1, "2L" = 2, "2R" = 3, "3L" = 4, "3R" = 5, "X" = 6) 
+CLEAR_LLR$chrom_num <- as.numeric(CLEAR_LLR$chrom_num)
+CLEAR_LLR <- subset(CLEAR_LLR, chrom_num != 1) #remove chromosome 4
+
+png("~/Documents/SSD_Data/man_HinvL.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(CLEAR_LLR, suggestiveline = F, genomewideline = F, snp="SNP",chr="chrom_num", bp="POS", p="altnull_H_invL", ylab="LLR", logp=FALSE, chrlabs = chromnames, col = c("orange4", "orange1")))
+dev.off()
+
+png("~/Documents/SSD_Data/man_LinvH.png", width = 12, height = 4, units = "in", res = 300)
+print(qqman::manhattan(CLEAR_LLR, suggestiveline = F, genomewideline = F, snp="SNP",chr="chrom_num", bp="POS", p="altnull_L_invH", ylab="LLR", logp=FALSE, chrlabs = chromnames, col = c("blue1", "lightblue")))
+dev.off()
+```

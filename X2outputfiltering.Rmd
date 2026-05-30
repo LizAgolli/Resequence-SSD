@@ -1,0 +1,150 @@
+---
+title: "FlyBaseOutput"
+author: "Liz Chen"
+date: "2026-05-11"
+output: html_document
+---
+
+```{r}
+# Load required libraries
+library(dplyr)
+library(stringr)
+
+extract_genes_from_gff <- function(gff_file) {
+  # Read the GFF file
+  gff <- read.table(gff_file, sep = "\t", header = FALSE, 
+                    comment.char = "#", stringsAsFactors = FALSE, quote = "")
+  
+  # Add column names (standard GFF format)
+  colnames(gff) <- c("seqid", "source", "type", "start", "end", 
+                     "score", "strand", "phase", "attributes")
+  
+  # Keep only gene features (not exons, CDS, etc.)
+  genes <- gff[gff$type == "gene", ]
+  
+  # Extract gene IDs from the attributes column
+  # ID=FBgn0029939;Name=Cph;...
+  extract_attr <- function(attr, key) {
+    pattern <- paste0(key, "=([^;]+)")
+    matches <- regmatches(attr, regexec(pattern, attr))
+    sapply(matches, function(x) if(length(x) > 1) x[2] else NA)
+  }
+  
+  genes$gene_id <- extract_attr(genes$attributes, "ID")
+  genes$gene_name <- extract_attr(genes$attributes, "Name")
+  
+  # Filter out non-coding features if desired (optional)
+  # Keep only protein-coding genes (exclude lncRNA, tRNA, rRNA, etc.)
+  genes_coding <- genes[!grepl("lncRNA|tRNA|rRNA|pseudogene", genes$attributes, ignore.case = TRUE), ]
+  
+  # Return unique gene IDs as a character vector
+  unique_genes <- unique(na.omit(genes_coding$gene_id))
+  
+  cat("File:", basename(gff_file), "\n")
+  cat("  Total genes found:", nrow(genes), "\n")
+  cat("  Protein-coding genes:", length(unique_genes), "\n")
+  cat("  First 5 genes:", paste(head(unique_genes, 5), collapse = ", "), "\n\n")
+  
+  gene_df <- genes_coding[!duplicated(genes_coding$gene_id), c("gene_id", "gene_name")]
+  gene_df <- na.omit(gene_df)
+  return(gene_df)
+}
+```
+
+```{r}
+setwd("~/Documents/SSD_Data/GFFs/")
+CX2 <- extract_genes_from_gff("CX2featuremapper.gff")
+HX2 <- extract_genes_from_gff("HX2featuremapper.gff")
+LX2 <- extract_genes_from_gff("LX2featuremapper.gff")
+HinvL <- extract_genes_from_gff("HinvL.gff")
+LinvH <- extract_genes_from_gff("LinvH.gff")
+
+#filter controls
+HX2_filtered <- setdiff(HX2, CX2)
+LX2_filtered <- setdiff(LX2, CX2)
+
+#find overlap
+overlap_HX2_LX2 <- intersect(HX2_filtered, LX2_filtered) #H X2 and L X2
+
+overlap_HX2_LX2
+```
+
+```{r DGRP GWAS comparisons}
+vea_ssd <- scan(text = "asR:CR43898 baz CG1677 CG32333 CG43902 CG7884 pnt Strn-Mlck axo CG13917 CG14764 CG15765 CG1677 CG17097 CG30015 CG31743 CG32333 CG42458 CG42750 CG42852 CG43759 CG44153 CG4829 CG7985 Dgk dnc Drgx Dys eIF5B erm Fas3 Fife Fili fru IA-2 jing kirre msi Neto nmo nolo Pde11 pHCl-1 pigs pk pnt Pxn RhoGEF64C rols sano Sdc sdt Shab shot SPR tei Trim9 unc-13-4A vkg Wdr62 Wnt4", what = "character", quiet = TRUE)
+vea_ssd <- unique(vea_ssd)
+
+vea_ssp <- scan(text = "beat-IIb boi capu casp CG12535 CG32066 CG32373 CG33144 CG34354 CG34393 CG3558 CG42540 CG43759 CG44153 CG4563 cnc Cpr47Ed dally dcma DIP-eta dnc dpr2 Dys Fatp2 fred fz Glut1 IA-2 Ih jing kirre Klp31E kn Lmpt lu Neto path Pde11 Pdp1 Pka-C2 px rdgB Sema1a Sema2b Shab Shrm side-II so tai Tmtc1 Tmtc2 unc-13-4A wda Wdr62 zfh1 CadN CG14205 CG34354 CG3604 CG42750 CG4563 CG5973 clu Cpr47Ed dcma eIF5B Gfrl Klp31E kn lu path Pdp1 Pgam5-2 Pka-C2 rib Snx27 Tmtc2 wda", what = "character", quiet = TRUE)
+vea_ssp <- unique(vea_ssp)
+
+overlap_vea <- intersect(vea_ssd,vea_ssp)
+```
+
+```{r dataframe of overlaps}
+gene_lists <- list(HinvL = HinvL$gene_name, LinvH = LinvH$gene_name, HX2 = HX2_filtered$gene_name, LX2 = LX2_filtered$gene_name, vea_ssd = vea_ssd, vea_ssp = vea_ssp)
+all_genes <- unique(unlist(gene_lists))
+
+df <- as.data.frame(lapply(gene_lists, function(x) as.integer(all_genes %in% x)))
+rownames(df) <- all_genes
+
+df$appears <- rowSums(df)
+df <- df %>% arrange(-appears) #sorting by appearence count
+df
+
+write.csv(df, "~/Documents/SSD_Data/analysis_intersection.csv")
+```
+
+```{r}
+prob_overlap <- function(list1, list2){
+  overlap <- length(intersect(list1, list2))
+  draw1 <- (length(list1))
+  draw2 <- (length(list2))
+  genes_total <- 13986
+  phyper((overlap-1),
+       draw1, 
+       (genes_total-draw1), 
+       draw2, 
+       lower.tail = FALSE) #probability of the overlap or more
+}
+
+print("HX2 LX2")
+prob_overlap(HX2_filtered$gene_name, LX2_filtered$gene_name)
+
+print("HX2 (ssd, ssp, both)")
+prob_overlap(HX2_filtered$gene_name, vea_ssd)
+prob_overlap(HX2_filtered$gene_name, vea_ssp)
+prob_overlap(HX2_filtered$gene_name, overlap_vea)
+
+print("LX2 (ssd, ssp, both)")
+prob_overlap(LX2_filtered$gene_name, vea_ssd)
+prob_overlap(LX2_filtered$gene_name, vea_ssp)
+prob_overlap(LX2_filtered$gene_name, overlap_vea)
+
+print("LX2 HX2 overlap (ssd, ssp, both)")
+prob_overlap(overlap_HX2_LX2$gene_name, vea_ssd)
+prob_overlap(overlap_HX2_LX2$gene_name, vea_ssp)
+prob_overlap(overlap_HX2_LX2$gene_name, overlap_vea)
+
+print("all chi vs all GWAS")
+allchi <- unique(c(HX2_filtered$gene_name, LX2_filtered$gene_name))
+allGWAS <- unique(c(vea_ssd, vea_ssp))
+prob_overlap(allchi, allGWAS)
+```
+
+```{r}
+library(eulerr)
+
+vea_all <- unique(c(vea_ssd, vea_ssp))
+
+fit <- euler(list(
+  HX2 = HX2_filtered$gene_name,
+  LX2 = LX2_filtered$gene_name,
+  vea = vea_all
+), shape = "ellipse")
+
+png("~/Documents/SSD_Data/venn_3set.png", width = 800, height = 800)
+plot(fit,
+     fills = list(fill = c("#ffb656", "#004c84", "grey"), alpha = 0.6),
+     labels = list(labels = c("HL Chi-square", "LL Chi-square", "DGRP GWAS"), cex = 1.5),
+     quantities = list(cex = 1.3))
+dev.off()
+```
