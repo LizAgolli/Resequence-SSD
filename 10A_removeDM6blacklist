@@ -1,0 +1,122 @@
+# Setup directories
+INPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/9_PoolSNP"
+OUTPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/10_FST/A_dm6blacklist_filtered"
+BLACKLIST="/home/agoll3/las_ashingle_link/agoll3/Ref_Files/dm6-blacklist.v2.bed"
+
+# Create output directory
+mkdir -p "$OUTPUT_DIR"
+
+# Get list of VCF files
+FILES=($(ls ${INPUT_DIR}/*_output/*.vcf.gz))
+VCF="${FILES[$SLURM_ARRAY_TASK_ID]}"
+BASE=$(basename "$VCF" .vcf.gz)
+
+echo "========================================"
+echo "PROCESSING: $BASE"
+echo "INPUT: $VCF"
+echo "OUTPUT: $OUTPUT_DIR"
+echo "BLACKLIST: $BLACKLIST"
+echo "========================================"
+
+# Count variants before filtering
+echo "Counting variants before filtering..."
+BEFORE=$(zcat "$VCF" | grep -c "^[^#]")
+echo "Found $BEFORE variants"
+
+# ===========================================
+# AWK BLACKLIST FILTER (FIXED VERSION)
+# ===========================================
+echo "Applying blacklist filter..."
+
+# SINGLE AWK COMMAND - no nesting!
+zcat "$VCF" | awk -v blacklist="$BLACKLIST" '
+# ---------------------------------------------------------------------
+# PURPOSE: Remove variants that fall within blacklist regions
+# LOGIC:   Keep VCF line IF (chrom,position) NOT IN blacklist
+# ---------------------------------------------------------------------
+
+BEGIN {
+    # Load blacklist, automatically removing "chr" prefix
+    while (getline < blacklist) {
+        if ($0 ~ /^#/) continue
+        
+        # Remove "chr" prefix if present
+        chrom = $1
+        sub(/^chr/, "", chrom)
+        
+        # Convert BED 0-based to VCF 1-based
+        start = $2 + 1
+        end = $3
+        
+        # Mark all positions in this range
+        for (pos = start; pos <= end; pos++) {
+            key = chrom "\t" pos
+            blacklist_dict[key] = 1
+        }
+    }
+}
+
+{
+    # Line type detection
+    if ($0 ~ /^#/) {
+        # Header line → always keep
+        print
+    } else {
+        # Variant line → check blacklist
+        key = $1 "\t" $2
+        if (!(key in blacklist_dict)) {
+            print  # Keep if not blacklisted
+        }
+        # (implicitly skip if blacklisted)
+    }
+}
+' > "${OUTPUT_DIR}/${BASE}_blacklistRemoved.vcf"
+# ===========================================
+
+# Check if output was created
+if [ ! -f "${OUTPUT_DIR}/${BASE}_blacklistRemoved.vcf" ]; then
+    echo "ERROR: Output file was not created!"
+    exit 1
+fi
+
+# Count variants after filtering
+echo "Counting variants after filtering..."
+AFTER=$(grep -c "^[^#]" "${OUTPUT_DIR}/${BASE}_blacklistRemoved.vcf")
+REMOVED=$((BEFORE - AFTER))
+
+# Calculate percentage removed
+if [ "$BEFORE" -gt 0 ]; then
+    PERCENT_REMOVED=$(echo "scale=2; $REMOVED * 100 / $BEFORE" | bc 2>/dev/null || echo "0")
+else
+    PERCENT_REMOVED="0.00"
+fi
+
+# ===========================================
+# RESULTS SUMMARY
+# ===========================================
+echo ""
+echo "========================================"
+echo "FILTER RESULTS: $BASE"
+echo "========================================"
+echo "Variants BEFORE: $BEFORE"
+echo "Variants AFTER:  $AFTER"
+echo "Variants REMOVED: $REMOVED ($PERCENT_REMOVED%)"
+echo ""
+echo "Output file: ${OUTPUT_DIR}/${BASE}_blacklistRemoved.vcf"
+echo "File size: $(du -h "${OUTPUT_DIR}/${BASE}_blacklistRemoved.vcf" | cut -f1)"
+echo "========================================"
+
+# Validation checks
+if [ "$AFTER" -eq 0 ]; then
+    echo "WARNING: All variants were removed!"
+    echo "This might indicate a problem with the blacklist file."
+    echo "Check that chromosome names match between VCF and blacklist."
+    exit 1
+fi
+
+if [ "$REMOVED" -eq 0 ]; then
+    echo "WARNING: No variants were removed."
+    echo "This might indicate the blacklist file is empty or not matching."
+fi
+
+echo "Blacklist filtering completed successfully!"
