@@ -1,0 +1,107 @@
+# Setup
+INDIVIDUAL_DIR="/home/agoll3/las_ashingle_link/agoll3/9_PoolSNP/individual_chromosomes"
+REFERENCE="/home/agoll3/las_ashingle_link/agoll3/Ref_Files/dmel-all-chromosome-r6.62.fasta"
+OUTPUT_BASE="/home/agoll3/las_ashingle_link/agoll3/9_PoolSNP"
+POOLSNP_SCRIPT="/home/agoll3/bioinformatics_tools/PoolSNP/PoolSNP.sh"
+
+# Get chromosome and sample group
+CHROM_INDEX=$((SLURM_ARRAY_TASK_ID / 3))
+GROUP_INDEX=$((SLURM_ARRAY_TASK_ID % 3))
+
+CHROMOSOMES=("2L" "2R" "3L" "3R" "X" "4")
+CHROM="${CHROMOSOMES[$CHROM_INDEX]}"
+
+case $GROUP_INDEX in
+    0) SAMPLES=("CF" "HF" "LF" "OF"); GROUP="females_only" ;;
+    1) SAMPLES=("CM" "HM" "LM" "OM"); GROUP="males_only" ;;
+    2) SAMPLES=("C" "H" "L" "O"); GROUP="sexes_merged" ;;
+esac
+
+SAMPLE_NAMES=$(IFS=,; echo "${SAMPLES[*]}")
+OUTPUT_SUBDIR="${GROUP}_output"
+
+# Create temp space
+TEMP_DIR=$(mktemp -d -t poolsnp_XXXXXX)
+echo "Processing $CHROM for $GROUP"
+
+# Get input files
+INPUT_FILES=()
+for SAMPLE in "${SAMPLES[@]}"; do
+    INPUT_FILES+=("${INDIVIDUAL_DIR}/${SAMPLE}/${CHROM}.mpileup")
+done
+
+COMBINED="${TEMP_DIR}/${CHROM}.mpileup"
+
+# ===========================================
+# SIMPLE POSITION-BASED CHUNKING
+# ===========================================
+
+# Step 1: Get all positions from first file
+echo "Getting positions from ${INPUT_FILES[0]}"
+POSITIONS="${TEMP_DIR}/positions.txt"
+cut -f2 "${INPUT_FILES[0]}" | sort -nu > "$POSITIONS"
+TOTAL_POS=$(wc -l < "$POSITIONS")
+
+# Step 2: Split into chunks
+CHUNK_SIZE=100000
+CHUNKS=$(( (TOTAL_POS + CHUNK_SIZE - 1) / CHUNK_SIZE ))
+
+echo "Splitting $TOTAL_POS positions into $CHUNKS chunks"
+
+# Step 3: Process each chunk
+for CHUNK in $(seq 1 $CHUNKS); do
+    # Get start/end position INDEXES
+    START_IDX=$(( (CHUNK - 1) * CHUNK_SIZE + 1 ))
+    END_IDX=$(( CHUNK * CHUNK_SIZE ))
+    [ $END_IDX -gt $TOTAL_POS ] && END_IDX=$TOTAL_POS
+    
+    # Get actual genomic positions
+    START_POS=$(sed -n "${START_IDX}p" "$POSITIONS")
+    END_POS=$(sed -n "${END_IDX}p" "$POSITIONS")
+    
+    echo "  Chunk $CHUNK: positions $START_POS-$END_POS"
+    
+    # Extract this range from all files
+    CHUNK_FILES=()
+    for i in "${!INPUT_FILES[@]}"; do
+        awk -v s="$START_POS" -v e="$END_POS" '$2 >= s && $2 <= e' \
+            "${INPUT_FILES[$i]}" > "${TEMP_DIR}/chunk_${i}.txt"
+        CHUNK_FILES+=("${TEMP_DIR}/chunk_${i}.txt")
+    done
+    
+    # Combine this chunk
+    awk -v n=${#CHUNK_FILES[@]} '
+    BEGIN {FS=OFS="\t"}
+    NR==FNR {key=$1":"$2; data[key]=$0; cnt[key]=1; next}
+    {key=$1":"$2; if(key in data){data[key]=data[key]"\t"$4"\t"$5"\t"$6; cnt[key]++}}
+    END {for(k in data) if(cnt[k]==n) print data[k]}
+    ' "${CHUNK_FILES[0]}" "${CHUNK_FILES[@]:1}" >> "$COMBINED"
+    
+    rm -f "${CHUNK_FILES[@]}"
+done
+
+# ===========================================
+# RUN POOLSNP
+# ===========================================
+
+echo "Combined: $(wc -l < "$COMBINED") lines"
+
+mkdir -p "${OUTPUT_BASE}/${OUTPUT_SUBDIR}"
+
+export PATH="/home/agoll3/.local/bin:$PATH"
+bash "$POOLSNP_SCRIPT" \
+  mpileup="$COMBINED" \
+  reference="$REFERENCE" \
+  names="$SAMPLE_NAMES" \
+  max-cov=0.98 \
+  min-cov=60 \
+  min-count=20 \
+  min-freq=0.01 \
+  miss-frac=0.2 \
+  jobs=32 \
+  BS=1 \
+  output="${OUTPUT_BASE}/${OUTPUT_SUBDIR}/${CHROM}_${GROUP}"
+
+# Cleanup
+rm -rf "$TEMP_DIR"
+echo "Done: ${CHROM}_${GROUP}"
