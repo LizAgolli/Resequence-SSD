@@ -1,0 +1,40 @@
+module purge
+module load perl
+
+# Directories
+MPILEUP_DIR="/home/agoll3/las_ashingle_link/agoll3/8_IndelMasked/"
+SYNC_DIR="/home/agoll3/las_ashingle_link/agoll3/10_FST/B_syncFiles"
+
+mkdir -p "$SYNC_DIR"
+
+# List of all your files in order
+FILES=(
+  "${MPILEUP_DIR}/O_indelmasked.mpileup"
+  "${MPILEUP_DIR}/C_indelmasked.mpileup" 
+  "${MPILEUP_DIR}/H_indelmasked.mpileup"
+  "${MPILEUP_DIR}/L_indelmasked.mpileup"
+  "${MPILEUP_DIR}/OF_indelmasked.mpileup"
+  "${MPILEUP_DIR}/CF_indelmasked.mpileup"
+  "${MPILEUP_DIR}/HF_indelmasked.mpileup"
+  "${MPILEUP_DIR}/LF_indelmasked.mpileup"
+  "${MPILEUP_DIR}/OM_indelmasked.mpileup"
+  "${MPILEUP_DIR}/CM_indelmasked.mpileup"
+  "${MPILEUP_DIR}/HM_indelmasked.mpileup"
+  "${MPILEUP_DIR}/LM_indelmasked.mpileup"
+)
+
+# Get current file
+INPUT_MPILEUP="${FILES[$SLURM_ARRAY_TASK_ID-1]}"
+BASE=$(basename "${INPUT_MPILEUP}" _indelmasked.mpileup)
+
+echo "=== Converting $BASE to sync format ==="
+
+# Convert using popoolation2
+perl /home/agoll3/bioinformatics_tools/popoolation2/mpileup2sync.pl \
+  --input "$INPUT_MPILEUP" \
+  --output "${SYNC_DIR}/${BASE}.sync" \
+  --fastq-type sanger \
+  --min-qual 20
+
+echo "Created: ${SYNC_DIR}/${BASE}.sync"
+echo "File size: $(du -h "${SYNC_DIR}/${BASE}.sync" | cut -f1)"
