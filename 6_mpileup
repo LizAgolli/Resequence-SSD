@@ -1,0 +1,54 @@
+# Load environment
+module purge
+export PATH="/home/agoll3/.local/bin:$PATH"
+
+# Verify tools
+command -v samtools >/dev/null 2>&1 || { echo >&2 "ERROR: samtools not found"; exit 1; }
+
+# Parameters
+GENOME_SIZE=143706478
+INPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/5_MarkDup"
+OUTPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/6_Mpileup"
+
+mkdir -p "$OUTPUT_DIR"
+
+# Get input file
+FILES=(${INPUT_DIR}/*_merged.markdup.bam)
+INPUT_BAM="${FILES[$SLURM_ARRAY_TASK_ID-1]}"
+BASE_NAME=$(basename "$INPUT_BAM" _merged.markdup.bam)
+
+# Verify BAM file exists and is readable
+if [ ! -f "$INPUT_BAM" ]; then
+    echo "ERROR: BAM file not found: $INPUT_BAM" >&2
+    exit 1
+fi
+if [ ! -r "$INPUT_BAM" ]; then
+    echo "ERROR: Cannot read BAM file: $INPUT_BAM" >&2
+    exit 1
+fi
+
+READ_LENGTH=$(samtools view "$INPUT_BAM" | head -n 1 | awk '{print length($10)}')
+TOTAL_READS=$(samtools idxstats "$INPUT_BAM" | awk '{sum+=$3} END {print sum}')
+MAX_DEPTH=$(echo "scale=0; (1.5 * $TOTAL_READS * $READ_LENGTH / $GENOME_SIZE)" | bc)
+
+# Runtime logging
+echo "=== Processing $BASE_NAME ==="
+echo "Total reads: $TOTAL_READS"
+echo "Using read length: $READ_LENGTH"
+echo "Max depth (1.5x): $MAX_DEPTH"
+
+samtools mpileup -Q 20 -q 20 -d $MAX_DEPTH -f /home/agoll3/las_ashingle_link/agoll3/Ref_Files/dmel-all-chromosome-r6.62.fasta -o "$OUTPUT_DIR/${BASE_NAME}.mpileup" "$INPUT_BAM"
+
+EXIT_STATUS=$?
+if [ $EXIT_STATUS -ne 0 ]; then
+    echo "ERROR: samtools mpileup failed with exit code $EXIT_STATUS" >&2
+    exit $EXIT_STATUS
+fi
+
+if [ ! -s "$OUTPUT_DIR/${BASE_NAME}.mpileup" ]; then
+    echo "ERROR: Output file is empty" >&2
+    exit 1
+fi
+
+echo "Successfully created $OUTPUT_DIR/${BASE_NAME}.mpileup"
+ls -lh "$OUTPUT_DIR/${BASE_NAME}.mpileup"
