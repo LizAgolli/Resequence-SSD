@@ -1,0 +1,73 @@
+# Load modules
+module purge
+module load samtools/1.12    # Explicitly load specific version
+export PATH="/home/agoll3/.local/bin:$PATH"
+
+# Set directories
+INPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/4_Merged"
+OUTPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/5_MarkDup"
+mkdir -p "$OUTPUT_DIR"
+
+# Get list of BAM files
+mapfile -t FILES < <(find "$INPUT_DIR" -maxdepth 1 -name "*.bam" | sort)
+if [ ${#FILES[@]} -eq 0 ]; then
+    echo "ERROR: No BAM files found in $INPUT_DIR"
+    exit 1
+fi
+
+# Verify array index
+if [ "$SLURM_ARRAY_TASK_ID" -gt "${#FILES[@]}" ]; then
+    echo "ERROR: Array task ID $SLURM_ARRAY_TASK_ID exceeds number of files"
+    exit 1
+fi
+
+# Get current file
+INPUT_BAM="${FILES[$SLURM_ARRAY_TASK_ID-1]}"
+BASE_NAME=$(basename "$INPUT_BAM" .bam)
+echo "Processing $BASE_NAME ($SLURM_ARRAY_TASK_ID of ${#FILES[@]})"
+
+# Create temp directory
+TMP_DIR=$(mktemp -d -p "$SLURM_TMPDIR" markdup_tmp_XXXXXX)
+
+# Step 1: Sort by name (with memory optimization)
+echo "Step 1: Sorting by name"
+samtools sort -n -@ 8 -m 6G -T "$TMP_DIR/tmp_sort" -o "$TMP_DIR/${BASE_NAME}.namesorted.bam" "$INPUT_BAM" || {
+    echo "ERROR: Failed to sort by name"
+    exit 1
+}
+
+# Step 2: Fixmate
+echo "Step 2: Fixmate"
+samtools fixmate -m -@ 8 "$TMP_DIR/${BASE_NAME}.namesorted.bam" "$TMP_DIR/${BASE_NAME}.fixmate.bam" || {
+    echo "ERROR: Failed to fixmate"
+    exit 1
+}
+rm -f "$TMP_DIR/${BASE_NAME}.namesorted.bam"
+
+# Step 3: Sort by coordinate
+echo "Step 3: Sorting by coordinate"
+samtools sort -@ 8 -m 6G -T "$TMP_DIR/tmp_sort" -o "$TMP_DIR/${BASE_NAME}.coordsorted.bam" "$TMP_DIR/${BASE_NAME}.fixmate.bam" || {
+    echo "ERROR: Failed to sort by coordinate"
+    exit 1
+}
+rm -f "$TMP_DIR/${BASE_NAME}.fixmate.bam"
+
+# Step 4: Mark duplicates
+echo "Step 4: Marking duplicates"
+samtools markdup -l 150 -r -s -f "$OUTPUT_DIR/${BASE_NAME}.stats.txt" -d 2500 -@ 8 \
+    "$TMP_DIR/${BASE_NAME}.coordsorted.bam" "$OUTPUT_DIR/${BASE_NAME}.markdup.bam" || {
+    echo "ERROR: Failed to mark duplicates"
+    exit 1
+}
+rm -f "$TMP_DIR/${BASE_NAME}.coordsorted.bam"
+
+# Index final BAM
+echo "Indexing final BAM"
+samtools index -@ 8 "$OUTPUT_DIR/${BASE_NAME}.markdup.bam" || {
+    echo "ERROR: Failed to index BAM"
+    exit 1
+}
+
+# Cleanup
+rm -rf "$TMP_DIR"
+echo "Successfully processed $BASE_NAME"
