@@ -1,0 +1,53 @@
+# Input/Output directories
+INPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/6_Mpileup"
+OUTPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/7_RepeatsRemoved"
+GTF_FILE="/home/agoll3/las_ashingle_link/agoll3/Ref_Files/combined_repeats_blacklist.gtf"  # Use the cleaner version
+
+# FIX: Add quotes and dollar sign
+mkdir -p "$OUTPUT_DIR"
+
+# Get input files as array
+FILES=(${INPUT_DIR}/*.mpileup)
+
+# Add bounds checking
+if [ $SLURM_ARRAY_TASK_ID -gt ${#FILES[@]} ]; then
+    echo "ERROR: Array task ID $SLURM_ARRAY_TASK_ID exceeds number of files (${#FILES[@]})"
+    exit 1
+fi
+
+INPUT_FILE="${FILES[$SLURM_ARRAY_TASK_ID-1]}"
+BASE=$(basename "${INPUT_FILE}" .mpileup)
+
+# Add file verification
+if [ ! -f "$INPUT_FILE" ]; then
+    echo "ERROR: Input file not found: $INPUT_FILE" >&2
+    exit 1
+fi
+
+echo "=== Processing $BASE ==="
+echo "Input: $INPUT_FILE"
+echo "Output: ${OUTPUT_DIR}/${BASE}_filtered.mpileup"
+echo "Blacklist regions: $(wc -l < "$GTF_FILE")"
+
+# Run PoPoolation1
+perl /home/agoll3/bioinformatics_tools/popoolation_1.2.2/basic-pipeline/filter-pileup-by-gtf.pl \
+  --gtf "$GTF_FILE" \
+  --input "$INPUT_FILE" \
+  --output "${OUTPUT_DIR}/${BASE}_filtered.mpileup"
+
+# Check exit status
+EXIT_CODE=$?
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "ERROR: PoPoolation1 failed with exit code $EXIT_CODE" >&2
+    exit $EXIT_CODE
+fi
+
+# Verify output
+if [ ! -f "${OUTPUT_DIR}/${BASE}_filtered.mpileup" ]; then
+    echo "ERROR: Output file was not created" >&2
+    exit 1
+fi
+
+echo "Successfully created ${OUTPUT_DIR}/${BASE}_filtered.mpileup"
+echo "Original size: $(du -h "$INPUT_FILE" | cut -f1)"
+echo "Filtered size: $(du -h "${OUTPUT_DIR}/${BASE}_filtered.mpileup" | cut -f1)"
