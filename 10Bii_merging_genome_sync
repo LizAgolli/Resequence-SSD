@@ -1,0 +1,54 @@
+cd /home/agoll3/las_ashingle_link/agoll3/10_FST/B_syncFiles
+
+# Sort files by chromosome and position (if not already sorted)
+echo "Sorting files (if needed)..."
+for file in O.sync C.sync L.sync H.sync; do
+    if [ ! -f "${file%.sync}_sorted.sync" ]; then
+        sort -k1,1 -k2,2n "$file" > "${file%.sync}_sorted.sync" &
+    fi
+done
+wait
+
+# Merge using join (processes one chromosome at a time, low memory)
+echo "Merging files with join..."
+
+# Create a temporary script to process each chromosome separately
+awk '{print $1}' O_sorted.sync | sort -u > chromosomes.txt
+
+while read chr; do
+    echo "Processing chromosome $chr"
+    
+    # Extract each chromosome from each file
+    grep -w "^$chr" O_sorted.sync > tmp_O_${chr}.sync
+    grep -w "^$chr" C_sorted.sync > tmp_C_${chr}.sync
+    grep -w "^$chr" L_sorted.sync > tmp_L_${chr}.sync
+    grep -w "^$chr" H_sorted.sync > tmp_H_${chr}.sync
+    
+    # Merge chromosome files
+    join -t $'\t' -1 1 -2 1 -o 1.1,1.2,1.3,1.4,2.4 \
+         <(awk '{print $1":"$2 "\t" $0}' tmp_O_${chr}.sync) \
+         <(awk '{print $1":"$2 "\t" $0}' tmp_C_${chr}.sync) | \
+    awk -F'\t' '{split($1,a,":"); print a[1] "\t" a[2] "\t" $3 "\t" $4 "\t" $5}' > tmp_OC_${chr}.sync
+    
+    join -t $'\t' -1 1 -2 1 -o 1.1,1.2,1.3,1.4,1.5,2.4 \
+         <(awk '{print $1":"$2 "\t" $0}' tmp_OC_${chr}.sync) \
+         <(awk '{print $1":"$2 "\t" $0}' tmp_L_${chr}.sync) | \
+    awk -F'\t' '{split($1,a,":"); print a[1] "\t" a[2] "\t" $3 "\t" $4 "\t" $5 "\t" $6}' > tmp_OCL_${chr}.sync
+    
+    join -t $'\t' -1 1 -2 1 -o 1.1,1.2,1.3,1.4,1.5,1.6,2.4 \
+         <(awk '{print $1":"$2 "\t" $0}' tmp_OCL_${chr}.sync) \
+         <(awk '{print $1":"$2 "\t" $0}' tmp_H_${chr}.sync) | \
+    awk -F'\t' '{split($1,a,":"); print a[1] "\t" a[2] "\t" $3 "\t" $4 "\t" $5 "\t" $6 "\t" $7}' >> all_populations_chrom.sync
+    
+    # Clean up temporary files
+    rm tmp_*_${chr}.sync
+    
+done < chromosomes.txt
+
+# Sort final file
+sort -k1,1 -k2,2n all_populations_chrom.sync > all_populations.sync
+
+# Clean up
+rm chromosomes.txt all_populations_chrom.sync
+
+echo "Merge complete!"
