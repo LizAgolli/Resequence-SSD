@@ -1,0 +1,44 @@
+module purge
+module load repeatmasker 
+
+OUTPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/Ref_Files/repeatmasker_output"
+
+mkdir -p "$OUTPUT_DIR"
+
+# Run RepeatMasker
+/home/agoll3/bioinformatics_tools/RepeatMasker-4.2.0/RepeatMasker \
+  -pa 20 \
+  -lib /home/agoll3/las_ashingle_link/agoll3/Ref_Files/dmel-all-transposon-r6.62.fasta \
+  -dir "$OUTPUT_DIR" \
+  -gff \
+  /home/agoll3/las_ashingle_link/agoll3/Ref_Files/dmel-all-chromosome-r6.62.fasta
+
+echo "RepeatMasker completed successfully"
+
+# Combine all repetitive/blacklisted regions
+
+REPEATMASKER_GFF="/home/agoll3/las_ashingle_link/agoll3/Ref_Files/repeatmasker_output/dmel-all-chromosome-r6.62.fasta.out.gff"
+BLACKLIST_BED="/home/agoll3/las_ashingle_link/agoll3/Ref_Files/dm6-blacklist.v2.bed"
+COMBINED_GTF="/home/agoll3/las_ashingle_link/agoll3/Ref_Files/combined_repeats_blacklist.gtf"
+
+# Convert RepeatMasker GFF to GTF format
+awk 'BEGIN{OFS="\t"} 
+     !/^#/ {
+       print $1, "RepeatMasker", "exclude", $4, $5, ".", ".", ".", "gene_id \"repeat_"NR"\"" 
+     }' "$REPEATMASKER_GFF" > temp_repeats.gtf
+
+# Convert blacklist BED to GTF
+awk 'BEGIN{OFS="\t"} 
+     !/^#/ {
+       print $1, "Blacklist", "exclude", $2+1, $3, ".", ".", ".", "gene_id \""$1":"($2+1)"-"$3"\"" 
+     }' "$BLACKLIST_BED" > temp_blacklist.gtf
+
+# Combine files
+cat temp_repeats.gtf temp_blacklist.gtf | sort -k1,1 -k4,4n > "$COMBINED_GTF"
+
+# Clean up
+rm temp_repeats.gtf temp_blacklist.gtf
+
+echo "Combined GTF created: $COMBINED_GTF"
+echo "Total regions: $(wc -l < "$COMBINED_GTF")"
+
