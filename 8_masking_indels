@@ -1,0 +1,29 @@
+module purge
+
+# Input/Output directories
+INPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/7_RepeatsRemoved"
+OUTPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/8_IndelMasked"
+
+mkdir -p "$OUTPUT_DIR"
+
+# Get files
+FILES=(${INPUT_DIR}/*_filtered.mpileup)
+INPUT_FILE="${FILES[$SLURM_ARRAY_TASK_ID-1]}"
+BASE=$(basename "${INPUT_FILE}" _filtered.mpileup)
+
+# Step 1: Generate indel coordinates to exclude
+echo "=== Step 1: Detecting indel regions for $BASE ==="
+python "/home/agoll3/bioinformatics_tools/DrosEU_pipeline/scripts/DetectIndels.py" \
+  --mpileup "$INPUT_FILE" \
+  --minimum-count 1 \
+  --mask 10 \
+  > "${OUTPUT_DIR}/${BASE}_indel_coords.txt"
+
+# Step 2: Use coordinates to filter original mpileup
+echo "=== Step 2: Filtering mpileup for $BASE ==="
+awk 'NR==FNR{indel[$1"\t"$2]=1; next} !indel[$1"\t"$2]' "${OUTPUT_DIR}/${BASE}_indel_coords.txt" "$INPUT_FILE" > "${OUTPUT_DIR}/${BASE}_indelmasked.mpileup"
+
+echo "Completed: $BASE"
+echo "Input lines: $(wc -l < "$INPUT_FILE")"
+echo "Indel regions excluded: $(wc -l < "${OUTPUT_DIR}/${BASE}_indel_coords.txt")"
+echo "Output lines: $(wc -l < "${OUTPUT_DIR}/${BASE}_indelmasked.mpileup")"
