@@ -1,0 +1,24 @@
+# Input/Output directories
+INPUT_DIR="/home/agoll3/las_ashingle_link/agoll3/8_IndelMasked"
+OUTPUT_BASE="/home/agoll3/las_ashingle_link/agoll3/9_PoolSNP/individual_chromosomes"
+CHROMOSOMES=("2L" "2R" "3L" "3R" "X" "4")
+SAMPLES=("C" "CF" "CM" "H" "HF" "HM" "L" "LF" "LM" "O" "OF" "OM")
+
+mkdir -p "$OUTPUT_BASE"
+
+for SAMPLE in "${SAMPLES[@]}"; do
+    SAMPLE_DIR="${OUTPUT_BASE}/${SAMPLE}"
+    mkdir -p "$SAMPLE_DIR"
+    
+    INPUT_FILE="${INPUT_DIR}/${SAMPLE}_indelmasked.mpileup"
+    
+    echo "=== Splitting chromosomes for $SAMPLE ==="
+    
+    for CHROM in "${CHROMOSOMES[@]}"; do
+        awk -v chrom="$CHROM" '$1 == chrom' "$INPUT_FILE" > "${SAMPLE_DIR}/${CHROM}.mpileup"
+    done
+    
+    echo "Completed: $SAMPLE"
+done
+
+echo "All individual samples split by chromosome"
