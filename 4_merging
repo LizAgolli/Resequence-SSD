@@ -1,0 +1,39 @@
+# Use local samtools
+module purge
+export PATH="/home/agoll3/.local/bin:$PATH"
+
+# Directories
+BAM_DIR="/home/agoll3/las_ashingle_link/agoll3/3_Filtered"
+MERGED_DIR="/home/agoll3/las_ashingle_link/agoll3/4_Merged"
+mkdir -p "$MERGED_DIR"
+
+echo "=== Files in $BAM_DIR ==="
+ls "$BAM_DIR"/*.bam 2>/dev/null || echo "No BAM files found"
+
+echo "=== Merging by 1-character prefix ==="
+for prefix in C H L O; do
+    INPUT_BAMS=("$BAM_DIR"/"$prefix"*.bam)
+    if [ ${#INPUT_BAMS[@]} -gt 0 ]; then
+        OUTPUT_BAM="$MERGED_DIR/by_line/${prefix}_merged.bam"
+        mkdir -p "$(dirname "$OUTPUT_BAM")"
+        
+        echo "Merging ${#INPUT_BAMS[@]} files for $prefix -> $OUTPUT_BAM"
+        samtools merge -@ 8 -f "$OUTPUT_BAM" "${INPUT_BAMS[@]}"
+        samtools index -@ 4 "$OUTPUT_BAM"
+    fi
+done
+
+echo "=== Merging by 2-character prefix ==="
+for prefix in CF CM HF HM LF LM OF OM; do
+    INPUT_BAMS=("$BAM_DIR"/"$prefix"*.bam)
+    if [ ${#INPUT_BAMS[@]} -gt 0 ]; then
+        OUTPUT_BAM="$MERGED_DIR/by_linesex/${prefix}_merged.bam"
+        mkdir -p "$(dirname "$OUTPUT_BAM")"
+        
+        echo "Merging ${#INPUT_BAMS[@]} files for $prefix -> $OUTPUT_BAM"
+        samtools merge -@ 8 -f "$OUTPUT_BAM" "${INPUT_BAMS[@]}"
+        samtools index -@ 4 "$OUTPUT_BAM"
+    fi
+done
+
+echo "=== Merge completed ==="
